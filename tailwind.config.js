@@ -4,7 +4,6 @@ module.exports = {
     './app/**/*.{js,ts,jsx,tsx,mdx}',
     './components/**/*.{js,ts,jsx,tsx,mdx}',
     './hooks/**/*.{js,ts,jsx,tsx,mdx}',
-    './page.tsx',
   ],
   theme: { extend: {} },
   plugins: [],

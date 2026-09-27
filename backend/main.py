@@ -1,24 +1,27 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from typing import List, Optional
+from pydantic import BaseModel, Field
+from typing import List, Literal, Optional
 import os
-from openai import OpenAI
+from google import genai
+from google.genai import errors as genai_errors
+from google.genai import types
 from dotenv import load_dotenv
 
 load_dotenv()
 
 app = FastAPI(title="VoteReady API", version="1.0.0")
 
+# Comma-separated list of allowed frontend origins, e.g. https://voteready.vercel.app
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=[o.strip() for o in os.getenv("ALLOWED_ORIGINS", "*").split(",")],
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type"],
 )
 
-client = OpenAI(api_key="sk-dummy") if os.getenv("OPENAI_API_KEY") else None
+MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+client = genai.Client(api_key=os.environ["GEMINI_API_KEY"]) if os.getenv("GEMINI_API_KEY") else None
 
 SYSTEM_PROMPT = """
 You are VoteReady Assistant — a helpful, neutral, and friendly guide for first-time Indian voters aged 18–25.
@@ -41,7 +44,7 @@ STRICT RULES:
 TONE:
 - Friendly and encouraging, like a helpful older sibling
 - Simple language, no jargon
-- Bullet points when listing steps
+- Plain text only (the chat does not render Markdown): no **bold**, no # headings; use "- " for bullet points when listing steps
 
 USEFUL FACTS (use these):
 - Voter helpline: 1950
@@ -55,12 +58,12 @@ USEFUL FACTS (use these):
 """
 
 class Message(BaseModel):
-    role: str
-    content: str
+    role: Literal["user", "assistant"]
+    content: str = Field(max_length=2000)
 
 class ChatRequest(BaseModel):
-    messages: List[Message]
-    current_step: Optional[int] = None
+    messages: List[Message] = Field(min_length=1, max_length=40)
+    current_step: Optional[int] = Field(default=None, ge=1, le=8)
 
 class ChatResponse(BaseModel):
     reply: str
@@ -73,29 +76,46 @@ def root():
 def health():
     return {"status": "ok"}
 
+def to_gemini_contents(messages: List[Message]) -> list:
+    """Map chat history to Gemini roles; Gemini wants the conversation to open with a user turn."""
+    contents = [
+        {"role": "model" if m.role == "assistant" else "user", "parts": [{"text": m.content}]}
+        for m in messages
+    ]
+    while contents and contents[0]["role"] == "model":
+        contents.pop(0)  # drop the UI's canned greeting
+    return contents
+
+# Sync def: FastAPI runs it in a threadpool, so the blocking SDK call doesn't stall the event loop.
 @app.post("/chat", response_model=ChatResponse)
-async def chat(req: ChatRequest):
+def chat(req: ChatRequest):
+    if client is None:
+        raise HTTPException(status_code=503, detail="GEMINI_API_KEY is not configured")
+
+    contents = to_gemini_contents(req.messages)
+    if not contents:
+        raise HTTPException(status_code=422, detail="Conversation has no user message")
+
+    system = SYSTEM_PROMPT
+    if req.current_step is not None:
+        system += f"\n\nCONTEXT: The user is currently reading Step {req.current_step} of the voting guide. Tailor your answer to be relevant to this step if possible."
+
     try:
-        system = SYSTEM_PROMPT
-        if req.current_step is not None:
-            system += f"\n\nCONTEXT: The user is currently reading Step {req.current_step} of the voting guide. Tailor your answer to be relevant to this step if possible."
-
-        messages = [{"role": "system", "content": system}]
-        for msg in req.messages:
-            messages.append({"role": msg.role, "content": msg.content})
-
-        response = client.chat.completions.create(
-            model="gpt-4o",
-            messages=messages,
-            max_tokens=500,
-            temperature=0.5,
+        response = client.models.generate_content(
+            model=MODEL,
+            contents=contents,
+            config=types.GenerateContentConfig(
+                system_instruction=system,
+                max_output_tokens=800,
+                temperature=0.5,
+                # 2.5-flash "thinks" by default and that eats the output budget; not needed for FAQ answers.
+                thinking_config=types.ThinkingConfig(thinking_budget=0),
+            ),
         )
+    except genai_errors.APIError as e:
+        raise HTTPException(status_code=502, detail=f"Gemini error: {e.message}")
 
-        reply = response.choices[0].message.content
-        return ChatResponse(reply=reply)
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    return ChatResponse(reply=response.text or "Sorry, I couldn't answer that. Please check voters.eci.gov.in or call 1950.")
 
 @app.get("/guide")
 def get_guide():

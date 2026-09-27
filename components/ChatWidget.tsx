@@ -1,8 +1,6 @@
 'use client'
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { X, Send, RotateCcw, Bot, ChevronDown } from 'lucide-react'
-import { useBottomSheet } from '@/hooks/useBottomSheet'
-import { useSwipe } from '@/hooks/useSwipe'
+import { Send, RotateCcw, ChevronDown } from 'lucide-react'
 
 interface Message { role: 'user' | 'assistant'; content: string }
 
@@ -52,9 +50,6 @@ export default function ChatWidget({ isOpen, onClose, currentStep }: Props) {
     setClosing(true)
     setTimeout(() => { setClosing(false); onClose() }, 280)
   }, [onClose])
-
-  // Swipe down to close
-  const swipe = useSwipe({ onSwipeDown: handleClose, threshold: 80 })
 
   // Handle drag on sheet
   const onDragStart = (e: React.TouchEvent) => {
@@ -118,7 +113,7 @@ export default function ChatWidget({ isOpen, onClose, currentStep }: Props) {
     } catch {
       setMessages(prev => [...prev, {
         role: 'assistant',
-        content: 'Having trouble connecting right now. Please try again or call the voter helpline at **1950**.',
+        content: 'Having trouble connecting right now. Please try again or call the voter helpline at 1950.',
       }])
     } finally {
       setLoading(false)
@@ -136,7 +131,7 @@ export default function ChatWidget({ isOpen, onClose, currentStep }: Props) {
     <>
       {/* Backdrop */}
       <div
-        className={`bottom-sheet-backdrop ${closing ? 'animate-fade-out' : 'animate-fade-in'}`}
+        className="bottom-sheet-backdrop"
         onClick={handleClose}
         style={{ animation: closing ? 'fadeOut 0.28s ease forwards' : 'fadeIn 0.2s ease forwards' }}
       />
@@ -145,7 +140,6 @@ export default function ChatWidget({ isOpen, onClose, currentStep }: Props) {
       <div
         ref={sheetRef}
         className={`bottom-sheet ${closing ? 'animate-slide-out-down' : 'animate-slide-in-up'}`}
-        {...swipe}
         style={{ willChange: 'transform' }}
       >
         {/* Drag handle */}
@@ -171,7 +165,7 @@ export default function ChatWidget({ isOpen, onClose, currentStep }: Props) {
             <button onClick={reset} className="p-2 hover:bg-gray-100 rounded-xl transition-colors text-gray-400 hover:text-gray-600" title="Clear">
               <RotateCcw size={15} />
             </button>
-            <button onClick={handleClose} className="p-2 hover:bg-gray-100 rounded-xl transition-colors text-gray-400 hover:text-gray-600">
+            <button onClick={handleClose} aria-label="Close chat" className="p-2 hover:bg-gray-100 rounded-xl transition-colors text-gray-400 hover:text-gray-600">
               <ChevronDown size={18} />
             </button>
           </div>
@@ -232,7 +226,7 @@ export default function ChatWidget({ isOpen, onClose, currentStep }: Props) {
             type="text"
             value={input}
             onChange={e => setInput(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && !e.shiftKey && send()}
+            onKeyDown={e => e.key === 'Enter' && send()}
             placeholder="Ask anything about voting..."
             disabled={loading}
             className="flex-1 bg-gray-50 rounded-xl px-4 py-2.5 text-sm outline-none border border-gray-200 focus:border-orange-300 focus:ring-2 focus:ring-orange-100 transition-all"
@@ -240,6 +234,7 @@ export default function ChatWidget({ isOpen, onClose, currentStep }: Props) {
           <button
             onClick={() => send()}
             disabled={!input.trim() || loading}
+            aria-label="Send message"
             className="w-11 h-11 rounded-xl flex items-center justify-center transition-all duration-150 active:scale-90 flex-shrink-0 disabled:opacity-30"
             style={{ background: 'linear-gradient(135deg,#FF6B00,#FF8C00)' }}
           >
@@ -250,15 +245,11 @@ export default function ChatWidget({ isOpen, onClose, currentStep }: Props) {
         {/* Disclaimer */}
         <p className="text-center text-xs text-gray-400 pb-4 px-4">
           Politically neutral · Verify at{' '}
-          <a href="https://voters.eci.gov.in" target="_blank" className="underline underline-offset-2">voters.eci.gov.in</a>
+          <a href="https://voters.eci.gov.in" target="_blank" rel="noopener noreferrer" className="underline underline-offset-2">voters.eci.gov.in</a>
           {' '}· Helpline: 1950
         </p>
       </div>
 
-      <style jsx>{`
-        @keyframes fadeIn  { from{opacity:0} to{opacity:1} }
-        @keyframes fadeOut { from{opacity:1} to{opacity:0} }
-      `}</style>
     </>
   )
 }
