@@ -20,5 +20,5 @@
 
 ## Current state (2026-09-27)
 - Builds and runs locally; backend tests pass.
-- Not yet deployed: needs a valid Gemini key and the Render + Vercel setup steps in the README.
+- Chat verified end-to-end locally with a real Gemini key (backend/.env, gitignored). Not yet deployed: follow the Render + Vercel steps in the README.
 - `GET /guide` in the backend duplicates the frontend's STEPS and is unused by the UI.
