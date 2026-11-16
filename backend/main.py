@@ -1,27 +1,74 @@
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
-from typing import List, Literal, Optional
 import os
+import time
+from collections import defaultdict
+from typing import List, Literal, Optional
+
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
+from starlette.middleware.base import BaseHTTPMiddleware
+from dotenv import load_dotenv
 from google import genai
 from google.genai import errors as genai_errors
 from google.genai import types
-from dotenv import load_dotenv
 
 load_dotenv()
 
 app = FastAPI(title="VoteReady API", version="1.0.0")
 
 # Comma-separated list of allowed frontend origins, e.g. https://voteready.vercel.app
+# Defaults to "*" so local dev works out of the box; production MUST set an explicit origin.
+ALLOWED_ORIGINS = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "*").split(",")]
+if "*" in ALLOWED_ORIGINS:
+    print("WARNING: ALLOWED_ORIGINS is '*' — the /chat endpoint is public and unauthenticated. "
+          "Set ALLOWED_ORIGINS to your Vercel URL before going live.")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[o.strip() for o in os.getenv("ALLOWED_ORIGINS", "*").split(",")],
+    allow_origins=ALLOWED_ORIGINS,
     allow_methods=["GET", "POST"],
     allow_headers=["Content-Type"],
 )
 
 MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 client = genai.Client(api_key=os.environ["GEMINI_API_KEY"]) if os.getenv("GEMINI_API_KEY") else None
+
+# --- Security headers ---------------------------------------------------------
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+        return response
+
+app.add_middleware(SecurityHeadersMiddleware)
+
+# --- Rate limiting on the public /chat endpoint --------------------------------
+# /chat calls a paid LLM; unauthenticated callers must be throttled to keep
+# cost and latency sane. Per-IP sliding window, generous enough for a real user.
+RATE_LIMIT = int(os.getenv("CHAT_RATE_LIMIT", "10"))   # requests per window
+RATE_WINDOW = int(os.getenv("CHAT_RATE_WINDOW", "60"))  # seconds
+_ip_hits: dict[str, list[float]] = defaultdict(list)
+
+
+@app.middleware("http")
+async def rate_limit_middleware(request: Request, call_next):
+    if request.url.path == "/chat":
+        now = time.time()
+        hits = _ip_hits[request.client.host]
+        hits[:] = [t for t in hits if now - t < RATE_WINDOW]
+        if len(hits) >= RATE_LIMIT:
+            return JSONResponse(
+                status_code=429,
+                content={"detail": "Too many requests. Please wait a moment and try again."},
+                headers={"Retry-After": str(RATE_WINDOW)},
+            )
+        hits.append(now)
+    return await call_next(request)
 
 SYSTEM_PROMPT = """
 You are VoteReady Assistant — a helpful, neutral, and friendly guide for first-time Indian voters aged 18–25.
